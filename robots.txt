@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://9ns.top/sitemap.xml

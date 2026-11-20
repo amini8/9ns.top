@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documentation - 9NS</title>
+  <meta name="description" content="Get started with 9NS for Windows: encrypted DNS servers, routing rules, resolver pools, DNSSEC, service mode, and the kernel DNS guard.">
+  <meta name="theme-color" content="#0b1530">
+  <link rel="canonical" href="https://9ns.top/docs/">
+  <link rel="icon" href="/assets/9ns-nodes.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/" aria-label="9NS home"><img src="/assets/9ns-nodes.svg" alt="" width="44" height="44"><span>9NS</span></a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="/#features">Features</a>
+        <a href="/pricing/">Pricing</a>
+        <a href="/docs/" aria-current="page">Documentation</a>
+        <a href="https://github.com/amini8/9ns">GitHub</a>
+        <a class="button button-small" href="https://github.com/amini8/9ns/releases">Download</a>
+      </nav>
+    </div>
+  </header>
+
+<div class="docs-layout container">
+<aside class="docs-sidebar" aria-label="Documentation contents">
+  <p class="nav-group" id="use-cases-nav">Use Cases</p>
+  <nav aria-labelledby="use-cases-nav">
+    <a href="#prevent-dns-leak">Prevent DNS Leak</a>
+    <a href="#dnssec-made-easy">DNSSEC Made Easy</a>
+    <a href="#dns-and-multiple-interfaces">DNS and Multiple Interfaces</a>
+  </nav>
+  <p class="nav-group" id="documentation-nav">Documentation</p>
+  <nav aria-labelledby="documentation-nav">
+    <a href="#introduction">Introduction</a>
+    <a href="#installation">Installation and Uninstallation</a>
+    <a href="#quick-start">Quick Start</a>
+    <a href="#main-window">Main Window</a>
+    <a href="#dns-servers">DNS Servers</a>
+    <a href="#rules">Rules</a>
+    <a href="#pools-and-relays">Pools and Relays</a>
+    <a href="#dns-servers-import">DNS Servers Import</a>
+    <a href="#configuration-files-and-logs">Configuration Files and Logs</a>
+    <a href="#windows-service-mode">Windows Service Mode</a>
+    <a href="#kernel-driver">Kernel DNS Guard Driver</a>
+    <a href="#building-from-source">Building from Source</a>
+  </nav>
+</aside>
+
+<main class="docs-content" id="main" tabindex="-1">
+
+<p class="eyebrow">Guides &amp; reference</p>
+<h1>9NS Documentation</h1>
+<p class="subtitle">Advanced system DNS client, proxy &amp; filtering engine for Windows.</p>
+
+<!-- ================================================================ -->
+<h2 id="use-cases">Use Cases</h2>
+
+<h3 id="prevent-dns-leak">Prevent DNS Leak</h3>
+<p>
+  Windows applications and background services can bypass user-configured DNS settings,
+  especially on multi-homed machines with several adapters, VPNs, or virtual switches.
+  9NS closes these leaks on three levels:
+</p>
+<ul>
+  <li><strong>System integration.</strong> With <code>system_dns</code> enabled, 9NS sets
+  itself (<code>127.0.0.1</code> and <code>::1</code>) as the DNS server on every active adapter,
+  so all system DNS traffic arrives at the local proxy on port 53.</li>
+  <li><strong>Smart multi-homed resolution policy.</strong> With <code>prevent_dns_leaks</code>
+  enabled, 9NS manages the <code>DisableSmartNameResolution</code> policy so Windows
+  cannot parallel-query alternate resolvers behind your back.</li>
+  <li><strong>Kernel enforcement.</strong> The optional <a href="#kernel-driver">NineNsFlt
+  driver</a> blocks every DNS connection (UDP/TCP 53) that does not target loopback - even
+  apps that hard-code <code>8.8.8.8</code> are forced through 9NS.</li>
+</ul>
+<p>
+  A crash watchdog runs alongside the proxy and restores the original adapter DNS settings
+  if the main process ever terminates abnormally.
+</p>
+
+<h3 id="dnssec-made-easy">DNSSEC Made Easy</h3>
+<p>
+  Enable <code>dnssec_validation</code> and 9NS validates every reply on the client
+  side without any per-application setup:
+</p>
+<ul>
+  <li>The Authenticated Data (<strong>AD</strong>) bit from the upstream resolver is honored
+  over secure transports (DoH, DoT, DoQ, ODoH, DNSCrypt).</li>
+  <li><strong>RRSIG</strong> signatures are checked against their inception and expiration
+  timestamps to catch replayed or expired signatures.</li>
+  <li>Answers are classified as <code>Secure</code>, <code>Insecure</code>,
+  <code>Bogus</code> or <code>Indeterminate</code>, and <code>Bogus</code> replies are
+  turned into <code>SERVFAIL</code> before they can poison the cache.</li>
+  <li>Per-rule overrides via <code>dnssec_mode</code> (<code>default</code>, <code>force</code>,
+  <code>ignore</code>) let you relax or tighten validation for specific domains.</li>
+</ul>
+
+<h3 id="dns-and-multiple-interfaces">DNS and Multiple Interfaces</h3>
+<p>
+  On machines with several active adapters - LAN plus Wi-Fi, VPN tunnels, virtual switches -
+  the operating system may leak queries through whichever interface it prefers. 9NS
+  makes the behavior deterministic:
+</p>
+<ul>
+  <li>Dual-stack loopback redirection installs <code>127.0.0.1</code> and <code>::1</code> on
+  every adapter (configurable via <code>ipv6_loopback</code>).</li>
+  <li>Rules can be bound to a specific network adapter through the interface GUID, so
+  names belonging to a VPN domain are resolved only when that tunnel is up.</li>
+  <li>Upstream connections honor <code>bootstrap_ips</code>, removing the chicken-and-egg
+  problem of resolving the resolver's own hostname.</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="introduction">Introduction</h2>
+<p class="lead">
+  The Domain Name System (DNS) is the fundamental component of Internet communications.
+  It translates human-readable names, such as <code>www.example.net</code>, to IPv4 or IPv6
+  addresses that can be accessed through a network.
+</p>
+<p>
+  The standard DNS protocol is very old and cannot satisfy the requirements of modern
+  networking, including security, flexibility and reliability. A number of improved
+  protocols have been proposed - but even the latest operating systems and apps support
+  them poorly, if at all.
+</p>
+<p>
+  9NS resolves hostnames over plain DNS, DNS over HTTPS (DoH), DNS over TLS (DoT),
+  DNS over QUIC (DoQ), Oblivious DoH (ODoH) and DNSCrypt v2. Queries can be
+  anonymized through DNSCrypt relays or ODoH relays, and answers are validated with
+  client-side DNSSEC. For the strongest guarantee, a kernel-mode Windows Filtering
+  Platform driver blocks any DNS traffic that would bypass the proxy.
+</p>
+<p>
+  The key feature of 9NS is system-level integration. There is no need to change
+  DNS settings in multiple places: 9NS listens on local port 53, captures DNS
+  requests at the system level, and processes them according to your configuration and
+  rules. The engine can run as a regular desktop application, minimize to the system tray,
+  or run as a Windows service with no user logged on.
+</p>
+<p>
+  Even without modern protocols, 9NS brings powerful features: multiple DNS servers
+  and pools running simultaneously, hostname-mask rules with process/block/bypass/local
+  actions, hosts-file blocklists, a real-time query log with per-domain right-click
+  blocking, and a built-in browser for the public resolvers and relays lists with live
+  latency benchmarking.
+</p>
+
+<!-- ================================================================ -->
+<h2 id="installation">Installation and Uninstallation</h2>
+<div class="note warn">
+  <strong>Switching from 9ns:</strong> 9NS uses <code>9ns.exe</code>,
+  <code>%ProgramData%\9NS</code>, the <code>9NSService</code> service and the
+  <code>NineNsFlt</code> driver. Stop and quit the old installation so adapter DNS
+  is restored, and remove its service and driver before installing the new ones.
+  Do not run both versions together. Existing settings are left untouched; import
+  a valid configuration explicitly, and never copy the old DNS-backup file.
+</div>
+<p>
+  9NS runs on 64-bit editions of Windows 10 and Windows 11. Download the
+  <code>9NS-Setup-1.0.0.exe</code> installer (or the portable
+  <code>9ns-windows-x64.zip</code>) from the
+  <a href="https://github.com/amini8/9ns/releases">GitHub Releases</a> page.
+</p>
+<p>
+  Run the setup program and follow the wizard. It lets you choose the destination folder,
+  create Desktop and Start Menu shortcuts, install 9NS as a background Windows
+  service, and optionally install the NineNsFlt kernel DNS guard driver. No reboot is
+  required. A portable installation is equally simple: extract the zip anywhere and run
+  <code>start-app.bat</code> or <code>9ns.exe</code>.
+</p>
+<p>
+  To uninstall, use <em>Apps &amp; features</em> in Windows Settings, or run
+  <code>uninstall.bat</code> from the installation folder. The uninstaller stops and
+  removes the Windows service and the kernel driver, deletes shortcuts and registry
+  entries, and removes the installation directory.
+</p>
+<div class="note">
+  Administrator rights are required at runtime: 9NS binds local port 53 and changes
+  adapter DNS settings. The manifest in <code>9ns.exe</code> requests elevation
+  automatically. The kernel driver is test-signed; loading it requires test signing mode
+  or a machine-trusted code-signing certificate (see
+  <a href="#kernel-driver">Kernel DNS Guard Driver</a>).
+</div>
+
+<h2 id="quick-start">Quick Start</h2>
+<p>
+  When you start 9NS for the first time with an empty configuration, the
+  <strong>First Start Wizard</strong> appears. It offers one-click scenarios: popular
+  encrypted presets (Cloudflare, Google, Quad9, AdGuard), or the <strong>Public
+  Resolvers</strong> browser with more than a thousand community servers. The wizard is
+  available again at any time from the main window.
+</p>
+<p>
+  9NS adds its icon to the system tray while running. Open the main window by
+  left-clicking the icon; right-click for quick access to the engine controls, cache
+  flushing and the public resolvers browser.
+</p>
+<p>
+  Click <strong>Start Engine</strong> to activate protection. The engine status is shown
+  live in the header, and every query appears in the Query Log as it is processed:
+</p>
+<pre><code>example.com   A     12.4 ms   Secure   DoH  cloudflare-doh
+iana.org      AAAA   9.8 ms   Secure   DoT  google-dot</code></pre>
+<p>
+  Right-click any row to inspect the decoded DNS packet, block or bypass that domain, or
+  copy the name. To make 9NS start automatically, enable <em>Autostart</em> in the
+  settings; to keep it running after the window is closed, leave
+  <em>Close to tray</em> enabled.
+</p>
+<h2 id="main-window">Main Window</h2>
+<p>
+  Open the main window from the system tray icon. The header card shows the engine and
+  system-DNS state, Start/Stop, <em>Save Changes</em> with unsaved-change feedback,
+  <em>Flush Cache</em> and the Public Resolvers launcher. Next to it, a sidebar navigates
+  the six pages of the configuration (also reachable with <code>Ctrl+1</code>–
+  <code>Ctrl+6</code>):
+</p>
+<ul>
+  <li><strong>Overview</strong> - protection summary, live metrics and last-tested
+  upstream latency.</li>
+  <li><strong>Query Log</strong> - the central, real-time view of all DNS traffic: query
+  name, type, response code, target server, latency and DNSSEC status badges. Filter by
+  domain (<code>Ctrl+F</code>) or status, and right-click any row for context actions.</li>
+  <li><strong>Servers &amp; Pools</strong> - manage upstream servers, pools and the
+  default target, with inline reachability tests.</li>
+  <li><strong>Rules</strong> - the routing and blocking engine, evaluated top to bottom
+  with the first match winning.</li>
+  <li><strong>Settings</strong> - listener and cache, security, background operation and
+  logging.</li>
+  <li><strong>System Log</strong> - the diagnostics output.</li>
+</ul>
+<p>
+  <em>Inspect Query Details...</em> opens a decoded view of the DNS packet - question,
+  answer and authority sections side by side with a hex dump. Edits are a draft until
+  saved and take effect on the next engine start. When you close the window,
+  9NS keeps running minimized in the system tray (if enabled); <em>File &rsaquo;
+  Exit</em> always quits.
+</p>
+
+<h2 id="dns-servers">DNS Servers</h2>
+<p>
+  Open the <em>Servers &amp; Pools</em> sidebar page to manage upstreams. Each server has a
+  user-friendly name used by rules, pools and logs, and a protocol selected from the list
+  below.
+</p>
+<table>
+  <tr><th>Type</th><th>Address</th><th>Key parameters</th></tr>
+  <tr><td><code>plain</code></td><td>IP (<code>8.8.8.8</code>, <code>8.8.8.8:53</code>)</td>
+      <td>UDP with TCP fallback on truncation</td></tr>
+  <tr><td><code>doh</code></td><td><code>https://host/dns-query</code></td>
+      <td><code>bootstrap_ips</code>, <code>tls_verify</code></td></tr>
+  <tr><td><code>dot</code></td><td>host name or IP</td>
+      <td><code>port</code> (default 853), <code>sni</code>, <code>bootstrap_ips</code></td></tr>
+  <tr><td><code>doq</code></td><td>host name or IP</td>
+      <td><code>port</code> (default 853), <code>sni</code> - DNS over QUIC, ALPN <code>doq</code></td></tr>
+  <tr><td><code>odoh</code></td><td><code>https://target/dns-query</code></td>
+      <td><code>proxy</code> (ODoH relay URL), <code>bootstrap_ips</code></td></tr>
+  <tr><td><code>dnscrypt</code></td><td>via <code>sdns://</code> stamp</td>
+      <td>provider name, Ed25519 public key, optional relay</td></tr>
+</table>
+<p>
+  Use the <em>Test Server</em> button to measure the round-trip time of a live query
+  before saving. The <code>sdns://</code> button imports DNS Stamps - including DoQ
+  (<code>0x04</code>), ODoH (<code>0x05</code>) and relay stamps
+  (<code>0x81</code>/<code>0x85</code>) - such as those published in the
+  <a href="https://github.com/DNSCrypt/dnscrypt-resolvers">dnscrypt-resolvers</a> lists.
+</p>
+<p>An example configuration entry for an ODoH target reached through a relay:</p>
+<pre><code>{
+  "name": "odoh-target",
+  "type": "odoh",
+  "address": "https://adl01.dnscry.pt/dns-query",
+  "proxy": "https://odoh-relay.numa.rs/relay"
+}</code></pre>
+
+<h2 id="rules">Rules</h2>
+<p>
+  Rules decide how each resolve request is handled. 9NS examines rules in order and
+  the first match wins; if nothing matches, the default target (upstream or pool) is used.
+  A rule combines a hostname mask list with an action:
+</p>
+<ul>
+  <li><strong>Hostnames</strong> - comma, semicolon or newline separated; wildcards such as
+  <code>*.example.com</code>, <code>ad*.domain.org</code> or <code>*</code> are supported.
+  <em>From File...</em> loads a blocklist or a standard <code>/etc/hosts</code> formatted
+  file.</li>
+  <li><code>process</code> - resolve through a designated upstream server or pool.</li>
+  <li><code>block</code> - suppress the answer using a configurable mode:
+  <code>nxdomain</code>, <code>null_ip</code> (<code>0.0.0.0</code>/<code>::</code>),
+  <code>refused</code>, or silent <code>drop</code>.</li>
+  <li><code>bypass</code> - let the query escape to the system network adapter unchanged.</li>
+  <li><code>local</code> - return a static mapped IPv4 or IPv6 address.</li>
+</ul>
+<p>
+  Optional conditions narrow the match by query type (A, AAAA, PTR, ANY, ...) and by
+  network adapter (interface GUID). A per-rule <code>dnssec_mode</code> can force or
+  disable DNSSEC handling for the matched names.
+</p>
+<pre><code>{
+  "name": "Block Ads &amp; Trackers",
+  "hostnames": ["*.doubleclick.net", "*.telemetry.microsoft.com"],
+  "action": "block",
+  "block_mode": "nxdomain"
+}</code></pre>
+
+<h2 id="pools-and-relays">Pools and Relays</h2>
+<p>
+  Group upstreams into pools to add redundancy and load distribution. When a pool is
+  assigned to a rule, the strategy decides which member serves each query:
+</p>
+<table>
+  <tr><th>Strategy</th><th>Behavior</th></tr>
+  <tr><td><code>failover</code></td><td>Priority order; falls back to the next server on failure</td></tr>
+  <tr><td><code>fastest</code></td><td>Routes to the server with the lowest measured RTT</td></tr>
+  <tr><td><code>round_robin</code></td><td>Even rotation across healthy members</td></tr>
+  <tr><td><code>random</code></td><td>Uniform random selection per query</td></tr>
+</table>
+<p>
+  Relays make up the second use case. For <strong>Anonymized DNSCrypt</strong>, add a
+  relay (protocol <code>Relay</code>, <code>0x81</code> stamps) alongside DNSCrypt servers
+  in a pool: every query then travels through the relay to the server, so the resolver
+  never sees your IP. For <strong>ODoH</strong>, put a relay URL into the upstream's
+  <code>proxy</code> field - the query is HPKE-encrypted to the target and the relay only
+  forwards sealed messages. Only combine ODoH relays with ODoH servers, and DNSCrypt
+  relays with DNSCrypt servers.
+</p>
+
+<h2 id="dns-servers-import">DNS Servers Import</h2>
+<p>
+  The built-in <strong>Public Resolvers</strong> browser synchronizes directly with the
+  official dnscrypt-resolvers repositories:
+</p>
+<ul>
+  <li><a href="https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v2/public-resolvers.md"><code>public-resolvers.md</code></a>
+  (780+ resolvers) and <a href="https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v2/relays.md"><code>relays.md</code></a>
+  (315+ anonymized relays)</li>
+  <li><a href="https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/odoh-servers.md"><code>odoh-servers.md</code></a>
+  (ODoH targets) and <a href="https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/odoh-relays.md"><code>odoh-relays.md</code></a>
+  (ODoH relays)</li>
+</ul>
+<p>
+  Search by name, country or protocol (DoH, DoQ, ODoH, DNSCrypt, Relay), filter by
+  capabilities - <strong>DNSSEC</strong>, <strong>No Logs</strong>,
+  <strong>No Filter</strong> - and benchmark candidates with the live RTT pinger.
+  One click imports a server into your configuration, and one-click pool generation
+  groups the selected servers into a ready-to-use pool.
+</p>
+
+<h2 id="configuration-files-and-logs">Configuration Files and Logs</h2>
+<p>
+  9NS is configured through a single human-readable JSON file. It lives in a
+  protected system folder - not next to the executable:
+</p>
+<pre><code>%ProgramData%\9NS\config.json    (configuration)
+%ProgramData%\9NS\9ns.log  (log file)</code></pre>
+<p>
+  The schema is documented by
+  <a href="https://github.com/amini8/9ns/blob/master/src/config/config.example.json"><code>src/config/config.example.json</code></a>
+  and by the <em>Configuration Reference</em> in the README. The top-level keys control the
+  listen port, cache sizes and TTL bounds, system DNS integration, leak prevention,
+  DNSSEC validation, autostart and logging; <code>upstreams</code>, <code>pools</code> and
+  <code>rules</code> arrays hold the routing configuration. Invalid values are rejected at
+  load with an error naming the offending entry.
+</p>
+<p>
+  The query log is written according to <code>log_level</code>:
+  <code>error</code>, <code>info</code> or <code>debug</code>. Set <code>log_file</code>
+  to control the file name inside the data folder, or leave it empty to disable file
+  logging. The same events are always visible live in the Query Log page.
+</p>
+
+<h2 id="windows-service-mode">Windows Service Mode</h2>
+<p>
+  9NS can run as a Windows service, which provides two main features: the engine
+  runs in the background even when no user is logged on, and only an administrator can
+  start, stop or reconfigure it.
+</p>
+<pre><code>9ns.exe --install-service
+9ns.exe --uninstall-service
+9ns.exe --service</code></pre>
+<p>
+  The setup installer can register the service for you (option
+  <em>Install as background Windows Service</em>), or you can run the commands above from
+  an elevated prompt. The service reads the same <code>config.json</code> from
+  <code>%ProgramData%\9NS</code>. Build and test the configuration in regular
+  desktop mode first; the service picks it up at its next start.
+</p>
+
+<h2 id="kernel-driver">Kernel DNS Guard Driver</h2>
+<p>
+  The optional <strong>NineNsFlt</strong> driver is a Windows Filtering Platform
+  callout that enforces the proxy at the kernel level: every outbound connection to
+  remote port 53 (UDP or TCP) is permitted only when it targets loopback
+  (<code>127.0.0.0/8</code>, <code>::1</code>). Anything else is blocked, so applications
+  cannot leak DNS to hard-coded resolvers.
+</p>
+<ul>
+  <li>Installed optionally by the setup installer, or manually by right-clicking
+  <code>NineNsFlt.inf</code> and choosing <em>Install</em>.</li>
+  <li>Registers as a kernel service depending on the Base Filtering Engine (BFE) and
+  copies the driver to <code>System32\Drivers</code>.</li>
+  <li>Test-signed: to load it, enable test signing
+  (<code>bcdedit /set testsigning on</code>) and trust the certificate actually used
+  to sign the package (Root + Trusted Publishers). The default build uses
+  <em>9NS Test Signing</em>; an explicit signing-thumbprint override may select a
+  different existing certificate.</li>
+</ul>
+<div class="note warn">
+  The policy applies to all software on the machine - including 9NS's own plain-DNS
+  upstreams. While the driver is active, configure encrypted upstreams (DoH, DoT, DoQ,
+  ODoH, DNSCrypt).
+</div>
+
+<h2 id="building-from-source">Building from Source</h2>
+<p>
+  The application is built with the MSYS2 MinGW64 toolchain
+  (<code>mingw-w64-x86_64-{gcc,cmake,ninja,qt6-base,qt6-svg,openssl,libsodium}</code>):
+</p>
+<pre><code>cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT_DIR=&lt;msys64&gt;/mingw64
+cmake --build build-win</code></pre>
+<p>
+  The kernel driver requires Visual Studio Build Tools (C++) and the Windows Driver Kit:
+</p>
+<pre><code>src\driver\build.cmd</code></pre>
+<p>
+  Packaging produces the portable zip and the setup installer (both including the
+  driver package):
+</p>
+<pre><code>python scripts/package_windows.py
+python scripts/create_setup.py</code></pre>
+<p>
+  Pushing a <code>v*</code> tag builds everything on GitHub Actions and publishes a
+  GitHub Release with both artifacts attached.
+</p>
+
+<div class="docs-license">
+  <p>
+    9NS is free and open source software licensed under the
+    <a href="https://github.com/amini8/9ns/blob/master/LICENSE">GNU Affero General Public License v3.0</a>.
+    Source code, issues and contributions:
+    <a href="https://github.com/amini8/9ns">github.com/amini8/9ns</a>.
+  </p>
+</div>
+
+</main>
+</div>
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand footer-brand" href="/" aria-label="9NS home"><img src="/assets/9ns-nodes.svg" alt="" width="36" height="36"><span>9NS</span></a>
+      <p>Open source under <a href="https://github.com/amini8/9ns/blob/master/LICENSE">GNU AGPLv3</a>.</p>
+      <nav aria-label="Footer navigation"><a href="https://github.com/amini8/9ns">Source code</a><a href="https://github.com/amini8/9ns/releases">Releases</a></nav>
+    </div>
+  </footer>
+</body>
+</html>
